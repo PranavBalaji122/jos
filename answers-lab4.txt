@@ -1,0 +1,32 @@
+Lab 4 Write-up — ECE469 Spring 2026
+
+Question (MPBOOTPHYS vs boot/boot.S):
+MPBOOTPHYS subtracts the link-time start of the AP entry segment and
+ adds MPENTRY_PADDR so labels like gdt, gdtdesc, and start32 become 
+ the physical addresses where that code was copied below 1 MB. 
+ The bootloader’s boot.S is linked and loaded at low physical 
+ addresses, so its symbols already match the addresses the CPU 
+ uses before paging; mpentry.S is linked at KERNBASE but executed 
+ from MPENTRY_PADDR, so without translation those references would 
+ point into high memory that real mode cannot reach. If MPBOOTPHYS 
+ were omitted, instructions such as lgdt and the far jump would load
+wrong addresses, the AP would not enter protected mode correctly,
+and bootstrap would likely fault or hang. Thus MPBOOTPHYS bridges 
+link address and load address for the AP stub, while boot.S does 
+not need it because its link and load addresses coincide.
+
+
+Question (Big kernel lock vs per-CPU kernel stacks):
+The big kernel lock serializes execution of kernel code, but it does not merge the hardware stacks that each CPU uses when it is inside the kernel on behalf of an interrupt or trap. Each CPU has its own ESP that must point into memory that only that logical processor uses, or two CPUs handling traps concurrently would corrupt the same stack frame pointers and saved registers. A concrete failure mode is CPU 0 handling a syscall while CPU 1 takes a timer interrupt: both push onto one shared stack, interleaving trap frames and return addresses so returns use garbage and the kernel crashes. Separate per-CPU stacks are therefore required for correct per-processor call chains, independent of the big lock’s mutual exclusion of kernel critical sections.
+
+
+Question (Why can pointer e be used before and after lcr3() in env_run?):
+The kernel maps its own virtual region (from KERNBASE upward) identically in every page directory, including the kernel’s global page table and each environment’s page table. The pointer e refers to a struct Env in kernel memory, whose virtual address therefore resolves to the same physical frame regardless of whether CR3 currently selects kern_pgdir or the user’s env_pgdir. After lcr3(), user-space mappings change, but kernel mappings at high addresses do not, so dereferencing e remains valid. Only addresses that live in the user portion of the address space would become unsafe to interpret across an lcr3() without special care.
+
+
+Question (Saving registers when switching environments — why and where?):
+User-mode registers must be preserved so that when an environment runs again it continues with the same program counter, stack pointer, and general-purpose values as when it was stopped. If they were not saved, a later resume would execute wrong code or corrupt the process’s stack and callee-saved state. In JOS, the hardware and trap path save the user register set into a struct Trapframe on the kernel stack when the environment enters the kernel via an interrupt, exception, or system call. The scheduler and env_run() then select another environment and restore its saved Trapframe (via env_pop_tf) when returning to user mode, completing the switch.
+
+
+Understanding: user/faultalloc vs user/faultallocbad:
+In faultalloc, the page fault handler maps new pages at the faulting addresses using sys_page_alloc, and those virtual addresses are legitimate user addresses the kernel allows the environment to touch, so user_mem_check succeeds when the kernel builds the exception-stack frame. In faultallocbad, the program forces a fault at 0xdeadbeef, which is not mapped and is not a valid user writable region for that test’s purpose, so when the kernel tries to write the UTrapframe onto the exception stack it still validates the target buffer with user_mem_check and fails the assertion. faultalloc therefore completes its string tests and exits gracefully, while faultallocbad is expected to die in the kernel’s safety check rather than “fixing” an arbitrary bad address. Together they show that user-level fault handling is constrained by the same permission checks as other kernel accesses to user memory.

@@ -285,7 +285,16 @@ mem_init_mp(void)
 	//     Permissions: kernel RW, user NONE
 	//
 	// LAB 4: Your code here:
-
+	//LLM Generated Code:
+	int i;
+	for (i = 0; i < NCPU; i++) {
+		uintptr_t kstacktop_i = KSTACKTOP - i * (KSTKSIZE + KSTKGAP);
+		boot_map_region(kern_pgdir,
+				kstacktop_i - KSTKSIZE,
+				KSTKSIZE,
+				PADDR(percpu_kstacks[i]),
+				PTE_W);
+	}
 }
 
 // --------------------------------------------------------------
@@ -326,13 +335,23 @@ page_init(void)
 	// free pages!
 	size_t i;
 	physaddr_t first_free_pa = PADDR(boot_alloc(0));
-	
+	//LLM Generated Code:(what is wrong with my bug)
+
+	// Read EBDA base from BDA to protect MP tables from corruption
+	uint16_t ebda_seg = *(uint16_t *)KADDR(0x40E);
+	physaddr_t ebda_pa = (physaddr_t)ebda_seg << 4;
+	size_t ebda_page = ebda_pa / PGSIZE;
+
 	page_free_list = NULL;
 	for (i = 0; i < npages; i++) {
 		pages[i].pp_ref = 0;
 		
 		if (i == 0) {
 			// 1) Page 0 in use (real-mode IDT / BIOS)
+		} else if (i == MPENTRY_PADDR / PGSIZE) {
+			// LAB 4: MPENTRY_PADDR page reserved for AP bootstrap
+		} else if (ebda_pa && i >= ebda_page && i < npages_basemem) {
+			// Protect EBDA and above (contains MP config tables)
 		} else if (i < npages_basemem) {
 			// 2) Base memory [PGSIZE, npages_basemem * PGSIZE) is free
 			pages[i].pp_link = page_free_list;
@@ -659,7 +678,14 @@ mmio_map_region(physaddr_t pa, size_t size)
 	// Hint: The staff solution uses boot_map_region.
 	//
 	// Your code here:
-	panic("mmio_map_region not implemented");
+	size_t rounded_size = ROUNDUP(size, PGSIZE);
+	if (base + rounded_size > MMIOLIM)
+		panic("mmio_map_region: overflow MMIOLIM");
+
+	boot_map_region(kern_pgdir, base, rounded_size, pa, PTE_PCD | PTE_PWT | PTE_W);
+	uintptr_t result = base;
+	base += rounded_size;
+	return (void *)result;
 }
 
 static uintptr_t user_mem_check_addr;

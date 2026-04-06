@@ -69,6 +69,44 @@ struct mpproc {         // processor table entry [MP 4.3.1]
 #define MPIOINTR  0x03  // One per bus interrupt source
 #define MPLINTR   0x04  // One per system interrupt source
 
+// ACPI structures for MADT fallback when MP table only reports 1 CPU
+struct acpi_rsdp {
+	uint8_t signature[8];       // "RSD PTR "
+	uint8_t checksum;
+	uint8_t oemid[6];
+	uint8_t revision;
+	uint32_t rsdt_addr;
+} __attribute__((__packed__));
+
+struct acpi_header {
+	uint8_t signature[4];
+	uint32_t length;
+	uint8_t revision;
+	uint8_t checksum;
+	uint8_t oemid[6];
+	uint8_t oemtableid[8];
+	uint32_t oemrev;
+	uint32_t creatorid;
+	uint32_t creatorrev;
+} __attribute__((__packed__));
+
+struct acpi_madt {
+	struct acpi_header header;
+	uint32_t lapic_addr;
+	uint32_t flags;
+	// variable-length entries follow
+} __attribute__((__packed__));
+
+#define MADT_TYPE_LAPIC 0
+
+struct madt_lapic {
+	uint8_t type;
+	uint8_t length;
+	uint8_t acpi_id;
+	uint8_t apic_id;
+	uint32_t flags;         // bit 0 = enabled
+} __attribute__((__packed__));
+
 static uint8_t
 sum(void *addr, int len)
 {
@@ -78,6 +116,101 @@ sum(void *addr, int len)
 	for (i = 0; i < len; i++)
 		sum += ((uint8_t *)addr)[i];
 	return sum;
+}
+
+// Find the ACPI RSDP by searching EBDA and BIOS ROM area.
+static struct acpi_rsdp *
+acpi_find_rsdp(void)
+{
+	struct acpi_rsdp *rsdp;
+	uint8_t *bda = (uint8_t *)KADDR(0x40 << 4);
+	uint32_t ebda;
+	uint8_t *p, *end;
+
+	// Search first KB of EBDA
+	ebda = *(uint16_t *)(bda + 0x0E);
+	if (ebda) {
+		p = (uint8_t *)KADDR(ebda << 4);
+		end = p + 1024;
+		for (; p < end; p += 16) {
+			rsdp = (struct acpi_rsdp *)p;
+			if (memcmp(rsdp->signature, "RSD PTR ", 8) == 0 &&
+			    sum(rsdp, 20) == 0)
+				return rsdp;
+		}
+	}
+
+	// Search BIOS ROM area
+	p = (uint8_t *)KADDR(0xE0000);
+	end = (uint8_t *)KADDR(0x100000);
+	for (; p < end; p += 16) {
+		rsdp = (struct acpi_rsdp *)p;
+		if (memcmp(rsdp->signature, "RSD PTR ", 8) == 0 &&
+		    sum(rsdp, 20) == 0)
+			return rsdp;
+	}
+	return NULL;
+}
+
+// Parse ACPI MADT to discover CPUs.
+// Returns the number of enabled CPUs found, or 0 on failure.
+static int
+acpi_madt_detect_cpus(void)
+{
+	struct acpi_rsdp *rsdp;
+	struct acpi_header *rsdt;
+	struct acpi_madt *madt = NULL;
+	uint32_t *entries;
+	int nentries, i;
+
+	rsdp = acpi_find_rsdp();
+	if (!rsdp)
+		return 0;
+
+	rsdt = (struct acpi_header *)KADDR(rsdp->rsdt_addr);
+	if (memcmp(rsdt->signature, "RSDT", 4) != 0 || sum(rsdt, rsdt->length) != 0)
+		return 0;
+
+	nentries = (rsdt->length - sizeof(struct acpi_header)) / 4;
+	entries = (uint32_t *)((uint8_t *)rsdt + sizeof(struct acpi_header));
+
+	for (i = 0; i < nentries; i++) {
+		struct acpi_header *h = (struct acpi_header *)KADDR(entries[i]);
+		if (memcmp(h->signature, "APIC", 4) == 0) {
+			madt = (struct acpi_madt *)h;
+			break;
+		}
+	}
+
+	if (!madt)
+		return 0;
+
+	// Parse MADT entries to find Local APIC entries
+	int found = 0;
+	uint8_t *p = (uint8_t *)madt + sizeof(struct acpi_madt);
+	uint8_t *end = (uint8_t *)madt + madt->header.length;
+
+	lapicaddr = madt->lapic_addr;
+
+	while (p < end) {
+		uint8_t type = p[0];
+		uint8_t len = p[1];
+		if (len < 2) break;
+
+		if (type == MADT_TYPE_LAPIC && len >= sizeof(struct madt_lapic)) {
+			struct madt_lapic *la = (struct madt_lapic *)p;
+			if (la->flags & 1) {  // enabled
+				if (found < NCPU) {
+					cpus[found].cpu_id = found;
+					if (found == 0)
+						bootcpu = &cpus[0];
+					found++;
+				}
+			}
+		}
+		p += len;
+	}
+	return found;
 }
 
 // Look for an MP structure in the len bytes at physical address addr.
@@ -213,6 +346,18 @@ mp_init(void)
 		cprintf("SMP: configuration not found, SMP disabled\n");
 		return;
 	}
+
+	// ACPI MADT fallback: if the MP table only reports 1 CPU,
+	// try ACPI MADT which may have the correct count.
+	if (ncpu == 1) {
+		int acpi_ncpu = acpi_madt_detect_cpus();
+		if (acpi_ncpu > 1) {
+			ncpu = acpi_ncpu;
+			bootcpu = &cpus[0];
+			bootcpu->cpu_status = CPU_STARTED;
+		}
+	}
+
 	cprintf("SMP: CPU %d found %d CPU(s)\n", bootcpu->cpu_id,  ncpu);
 
 	if (mp->imcrp) {
