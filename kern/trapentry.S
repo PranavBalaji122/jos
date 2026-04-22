@@ -55,8 +55,79 @@
 // HINT 3 : READ Intel's manual to check if the trap includes an error code
 //          or not...
 
+
+
+// LLM Generated Prompt: check if what i have written is correct 
+
+/* Trap handlers that don't push error codes */
+TRAPHANDLER_NOEC(t_divide, T_DIVIDE);
+TRAPHANDLER_NOEC(t_debug, T_DEBUG);
+TRAPHANDLER_NOEC(t_nmi, T_NMI);
+TRAPHANDLER_NOEC(t_brkpt, T_BRKPT);
+TRAPHANDLER_NOEC(t_oflow, T_OFLOW);
+TRAPHANDLER_NOEC(t_bound, T_BOUND);
+TRAPHANDLER_NOEC(t_illop, T_ILLOP);
+TRAPHANDLER_NOEC(t_device, T_DEVICE);
+TRAPHANDLER_NOEC(t_fperr, T_FPERR);
+TRAPHANDLER_NOEC(t_align, T_ALIGN);
+TRAPHANDLER_NOEC(t_mchk, T_MCHK);
+TRAPHANDLER_NOEC(t_simderr, T_SIMDERR);
+TRAPHANDLER_NOEC(t_syscall, T_SYSCALL);
+
+/* Trap handlers that push error codes */
+TRAPHANDLER(t_dblflt, T_DBLFLT);
+TRAPHANDLER(t_tss, T_TSS);
+TRAPHANDLER(t_segnp, T_SEGNP);
+TRAPHANDLER(t_stack, T_STACK);
+TRAPHANDLER(t_gpflt, T_GPFLT);
+TRAPHANDLER(t_pgflt, T_PGFLT);
+
+/*
+ * Lab 4: IRQ handlers
+ */
+TRAPHANDLER_NOEC(t_irq0, IRQ_OFFSET + 0)
+TRAPHANDLER_NOEC(t_irq1, IRQ_OFFSET + 1)
+TRAPHANDLER_NOEC(t_irq2, IRQ_OFFSET + 2)
+TRAPHANDLER_NOEC(t_irq3, IRQ_OFFSET + 3)
+TRAPHANDLER_NOEC(t_irq4, IRQ_OFFSET + 4)
+TRAPHANDLER_NOEC(t_irq5, IRQ_OFFSET + 5)
+TRAPHANDLER_NOEC(t_irq6, IRQ_OFFSET + 6)
+TRAPHANDLER_NOEC(t_irq7, IRQ_OFFSET + 7)
+TRAPHANDLER_NOEC(t_irq8, IRQ_OFFSET + 8)
+TRAPHANDLER_NOEC(t_irq9, IRQ_OFFSET + 9)
+TRAPHANDLER_NOEC(t_irq10, IRQ_OFFSET + 10)
+TRAPHANDLER_NOEC(t_irq11, IRQ_OFFSET + 11)
+TRAPHANDLER_NOEC(t_irq12, IRQ_OFFSET + 12)
+TRAPHANDLER_NOEC(t_irq13, IRQ_OFFSET + 13)
+TRAPHANDLER_NOEC(t_irq14, IRQ_OFFSET + 14)
+TRAPHANDLER_NOEC(t_irq15, IRQ_OFFSET + 15)
+
 /*
  * Lab 3: Your code here for _alltraps
  */
+ // LLM: Help me with the _alltraps function
+_alltraps:
+
+	pushl %ds
+	pushl %es
+	
+	pushal
+	
+
+	movw $GD_KD, %ax
+	movw %ax, %ds
+	movw %ax, %es
+	
+
+	pushl %esp
+	
+	call trap
+	
+	addl $4, %esp   // Remove pushed esp
+	popal           // Restore general purpose registers
+	popl %es        // Restore es
+	popl %ds        // Restore ds
+	addl $8, %esp   // Skip trapno and err
+	iret            // Return from interrupt
 
 
